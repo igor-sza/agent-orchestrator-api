@@ -1,9 +1,13 @@
 from pydantic import BaseModel
-from typing import Any
+from typing import Any, Optional
 
 class InterrogateRequest(BaseModel):
     session_id: str
     player_text: str
+    # Opcional de proposito: o Unity ainda nao envia. Sem ele o backend usa o
+    # caso padrao, entao o cliente atual continua funcionando sem alteracao.
+    # Quando a CaseSelectionScene passar o CaseInfo.caseId, e so preencher.
+    case_id: Optional[str] = None
 
 class StatusInvestigacao(BaseModel):
     nivel_suspeita: int

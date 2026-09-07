@@ -5,11 +5,19 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List
 
-from fastapi import FastAPI, HTTPException
+from contextlib import asynccontextmanager
+
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.schemas import InterrogateRequest, ResponseContract
+from app.services.case_repository import list_cases
 from app.services.context_memory import ContextMemoryManager
+from app.services.llm_providers import (
+    LLMProvider,
+    LLMUnavailableError,
+    get_llm_provider,
+)
 from app.services.prompt_orchestrator import PromptOrchestrator
 
 class JsonFormatter(logging.Formatter):
@@ -39,10 +47,18 @@ arquivo.setFormatter(formatter)
 logger.addHandler(console)
 logger.addHandler(arquivo)
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    yield
+    # O provedor local mantem um httpx.AsyncClient aberto entre requisicoes;
+    # sem fechar no shutdown o uvicorn reclama de conexao vazando no reload.
+    await get_llm_provider().aclose()
+
 app = FastAPI(
     title="Guilty API",
     description="API do jogo",
-    version="1.0"
+    version="1.0",
+    lifespan=lifespan
 )
 
 app.add_middleware(
@@ -66,7 +82,8 @@ def health():
     return {"status": "ok"}
 
 @app.post("/interrogate", response_model=ResponseContract)
-async def interrogate(req: InterrogateRequest):
+async def interrogate(req: InterrogateRequest,
+                      provider: LLMProvider = Depends(get_llm_provider)):
     sessao = req.session_id
     agora = time.time()
 
@@ -82,16 +99,30 @@ async def interrogate(req: InterrogateRequest):
     rate_limit[sessao] = historico
 
     logger.info(f"Mensagem recebida na sessao {sessao}")
-    memoria.append_turn(sessao, req.player_text)
+    memoria.append_turn(sessao, req.player_text, role="suspeito")
 
-    modo = "real" if orchestrator.gemini_client.api_key else "mock"
-    logger.info(f"Modo: {modo}")
+    logger.info(f"Provedor: {provider.nome}")
 
-    res = orchestrator.analyze(sessao, req.player_text, mode=modo)
+    try:
+        res = await orchestrator.analyze(sessao, req.player_text,
+                                         provider=provider, case_id=req.case_id)
+    except LLMUnavailableError as exc:
+        # 503 e nao 500: o problema nao e a nossa API, e o modelo que nao esta
+        # no ar. O ApiClient do Unity ja trata nao-2xx e mostra a mensagem.
+        logger.error(f"Provedor {provider.nome} indisponivel: {exc}")
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
-    memoria.append_turn(sessao, res.get("texto_detetive", ""))
+    memoria.append_turn(sessao, res.get("texto_detetive", ""), role="detetive")
 
     return res
+
+@app.get("/cases")
+def listar_casos():
+    """
+    Casos disponiveis, so com o que pode ser mostrado antes do interrogatorio.
+    A secao `verdade` nunca sai daqui — vazaria o culpado.
+    """
+    return {"cases": list_cases()}
 
 @app.get("/session/{session_id}")
 def get_session(session_id: str):

@@ -16,14 +16,24 @@ class ContextMemoryManager:
     def _session_version_path(self, session_id: str) -> Path:
         return self.storage_dir / f"{session_id}_version.json"
 
-    def append_turn(self, session_id: str, text: str) -> None:
+    def append_turn(self, session_id: str, text: str, role: str = "") -> None:
+        """
+        Grava uma fala no histórico da sessão.
+
+        `role` identifica quem falou (SUSPEITO / DETETIVE). Sem isso, o arquivo
+        era uma lista plana de linhas e, quando voltava como contexto para o
+        modelo, ele tinha que adivinhar quem tinha dito o quê — em sessões
+        reais isso fazia o detetive atribuir ao jogador falas dele mesmo.
+        Arquivos antigos, sem o marcador, continuam sendo lidos normalmente.
+        """
         path = self._session_md_path(session_id)
         timestamp = datetime.now().isoformat()
+        marcador = f"({role.upper()}) " if role else ""
 
         lock_path = path.with_suffix('.lock')
         with FileLock(lock_path):
             with open(path, "a", encoding="utf-8") as f:
-                f.write(f"[{timestamp}] - {text}\n")
+                f.write(f"[{timestamp}] {marcador}- {text}\n")
 
         self._update_version(session_id)
 
@@ -66,37 +76,46 @@ class ContextMemoryManager:
 
         vistos = set()
         linhas_unicas = []
-        
+
         for linha in ultimas_linhas:
-            # limpa o timestamp pra evitar duplicidade
-            texto_limpo = linha.split('] - ', 1)[-1] if '] - ' in linha else linha
+            texto_limpo = self._texto_sem_cabecalho(linha)
             if texto_limpo not in vistos:
                 vistos.add(texto_limpo)
                 linhas_unicas.append(linha)
 
         return "\n".join(linhas_unicas)
 
-    def get_prompt_context(self, session_id: str) -> str:
-        caminho_fatos = self.storage_dir / "fatos_crime.json"
-        contexto_fatos = ""
-        
-        if caminho_fatos.exists():
-            try:
-                with open(caminho_fatos, 'r', encoding='utf-8') as f:
-                    fatos = json.load(f)
-                contexto_fatos = f"""
-FATOS DO CRIME:
-- Vítima: {fatos.get('victim', 'Desconhecida')}
-- Horário: {fatos.get('time', 'Desconhecido')}
-- Local: {fatos.get('location', 'Desconhecido')}
-"""
-            except Exception as e:
-                contexto_fatos = f"Erro ao carregar fatos: {e}"
+    @staticmethod
+    def _texto_sem_cabecalho(linha: str) -> str:
+        """
+        Remove '[timestamp] (PAPEL) - ' e devolve só a fala.
 
+        Usado para deduplicar. Procura o primeiro '- ' DEPOIS do ']' em vez do
+        literal '] - ': com o marcador de papel no meio, o formato virou
+        '] (SUSPEITO) - ' e a busca antiga nunca casava — o timestamp entrava
+        na comparação e duas falas idênticas nunca eram vistas como repetidas.
+        """
+        fim_colchete = linha.find(']')
+        if fim_colchete == -1:
+            return linha.strip()
+
+        resto = linha[fim_colchete + 1:]
+        sep = resto.find('- ')
+        return (resto[sep + 2:] if sep != -1 else resto).strip()
+
+    def get_prompt_context(self, session_id: str) -> str:
+        """
+        Monta só o HISTÓRICO da sessão.
+
+        Os fatos do crime saíram daqui: agora vêm do case_repository, montados
+        pelo PromptOrchestrator. Antes este método procurava um
+        data/fatos_crime.json que nunca existiu, e havia dois lugares diferentes
+        tentando injetar fatos no mesmo prompt.
+        """
         resumo = self.summarize(session_id, max_lines=5)
         janela = self.get_sliding_window(session_id, window_size=3)
 
-        partes = [contexto_fatos.strip()]
+        partes = []
 
         if resumo:
             partes.append(f"RESUMO DA SESSÃO (últimas interações):\n{resumo}")
@@ -104,7 +123,10 @@ FATOS DO CRIME:
         if janela and janela != "Nenhuma interação anterior.":
             partes.append(f"JANELA DESLIZANTE (últimos turnos completos):\n{janela}")
 
-        return '\n\n'.join(partes)
+        if not partes:
+            return "=== HISTÓRICO DA SESSÃO ===\nPrimeiro turno: nada foi dito ainda."
+
+        return "=== HISTÓRICO DA SESSÃO ===\n" + '\n\n'.join(partes)
 
     def cleanup_old_sessions(self, max_age_days: int = 30) -> int:
         apagados = 0

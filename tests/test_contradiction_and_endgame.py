@@ -4,15 +4,28 @@ import sys
 from pathlib import Path
 # Garantir que o diretório do projeto esteja no sys.path para imports locais
 sys.path.append(str(Path(__file__).resolve().parents[1]))
-from app.main import interrogate, memory
+# O main expõe a memória como `memoria`; o import antigo pedia `memory` e
+# derrubava este arquivo inteiro no ImportError, antes de rodar qualquer teste.
+from app.main import interrogate, memoria as memory
 from app.schemas import InterrogateRequest
 from app.services.context_memory import ContextMemoryManager
+from app.services.llm_providers import MockProvider
 
 
 def test_contradiction_persistence():
     session = "contradict_session"
+    # Limpa o estado do turno anterior: com o arquivo de versão sobrando de uma
+    # execução passada, a asserção do turno 1 falha na segunda rodada.
+    mem = ContextMemoryManager(storage_dir="data")
+    for caminho in (mem._session_version_path(session), mem._session_md_path(session)):
+        try:
+            if caminho.exists():
+                caminho.unlink()
+        except Exception:
+            pass
+
     req = InterrogateRequest(session_id=session, player_text="Eu não estava lá.")
-    result = asyncio.run(interrogate(req))
+    result = asyncio.run(interrogate(req, provider=MockProvider()))
     # Verifica arquivo _version.json existe e contém contradições
     version_path = memory._session_version_path(session)
     assert version_path.exists()

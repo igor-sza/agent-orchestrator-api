@@ -1,0 +1,81 @@
+{
+  "case_id": "CASO 01",
+  "titulo": "O Homicídio da Rua 7",
+  "resumo_publico": "Um homem é encontrado morto no depósito dos fundos de uma gráfica na Rua 7. O último funcionário a deixar o prédio é levado para interrogatório.",
+
+  "papel_do_jogador": {
+    "nome": "Daniel Reis",
+    "funcao": "Operador de impressão na Gráfica Bandeirantes",
+    "situacao": "Suspeito principal. Foi o último a sair do prédio e tinha desavença registrada com a vítima.",
+    "instrucao_ao_detetive": "O interlocutor É o suspeito, não uma testemunha. Trate-o como tal: nada de 'cidadão' ou 'testemunha'. Chame-o de Daniel ou 'senhor Reis'."
+  },
+
+  "vitima": {
+    "nome": "Otávio Lisboa",
+    "idade": 47,
+    "funcao": "Sócio-proprietário da Gráfica Bandeirantes"
+  },
+
+  "_comentario_verdade": "Isto é o que DE FATO aconteceu. Serve para julgar as falas do suspeito. O detetive NUNCA revela nada daqui que não esteja também em evidencias_conhecidas.",
+  "verdade": {
+    "culpado": "Marcelo Aguiar, o outro sócio",
+    "jogador_e_culpado": false,
+    "o_que_aconteceu": "Marcelo Aguiar matou Otávio durante uma discussão sobre desvio de dinheiro da gráfica, por volta das 20:15, no depósito dos fundos. Daniel Reis não estava no depósito nesse horário: tinha saído para fumar no beco lateral, sozinho, entre 20:05 e 20:35 — o que o deixa sem álibi verificável exatamente na janela do crime.",
+    "linha_do_tempo": [
+      { "hora": "19:40", "fato": "Marcelo chega à gráfica por uma porta lateral. Não passa pela recepção." },
+      { "hora": "19:52", "fato": "Daniel discute com Otávio no salão de máquinas por causa de horas extras não pagas. Dois colegas ouvem." },
+      { "hora": "20:05", "fato": "Daniel sai para o beco lateral para fumar. Fica sozinho lá até 20:35." },
+      { "hora": "20:15", "fato": "Marcelo mata Otávio no depósito dos fundos." },
+      { "hora": "20:26", "fato": "Marcelo deixa o prédio pela mesma porta lateral." },
+      { "hora": "20:35", "fato": "Daniel volta, encontra tudo aparentemente normal e vai embora às 20:48 pela recepção." },
+      { "hora": "06:10", "fato": "O corpo é encontrado pela equipe da manhã." }
+    ]
+  },
+
+  "_comentario_evidencias": "Isto é o que o detetive TEM EM MÃOS. É a única coisa que ele pode citar, mostrar ou usar para pressionar.",
+  "evidencias_conhecidas": [
+    {
+      "id": "laudo_horario",
+      "descricao": "O laudo cadavérico fixa a morte entre 20:00 e 20:30.",
+      "fonte": "Perícia"
+    },
+    {
+      "id": "cracha_saida",
+      "descricao": "O crachá de Daniel Reis registra saída pela recepção às 20:48. Não há registro de saída anterior.",
+      "fonte": "Controle de acesso"
+    },
+    {
+      "id": "discussao_ouvida",
+      "descricao": "Dois colegas relatam ter ouvido Daniel discutir com a vítima por volta das 19:50, sobre horas extras não pagas.",
+      "fonte": "Depoimento de terceiros"
+    },
+    {
+      "id": "camera_recepcao",
+      "descricao": "A câmera da recepção cobre apenas a entrada principal. A porta lateral e o beco não são cobertos.",
+      "fonte": "Segurança"
+    },
+    {
+      "id": "objeto_ausente",
+      "descricao": "Um pé-de-cabra que ficava no depósito não foi localizado.",
+      "fonte": "Inventário"
+    }
+  ],
+
+  "_comentario_lacunas": "O que o detetive NÃO sabe. É isto que ele tenta arrancar no interrogatório — e o que torna o jogo jogável.",
+  "lacunas": [
+    "Onde Daniel esteve entre 20:00 e 20:35.",
+    "Se alguém mais estava no prédio fora do registro da recepção.",
+    "Quem tinha acesso à porta lateral.",
+    "O paradeiro do pé-de-cabra."
+  ],
+
+  "_comentario_suspeita": "Âncoras para o nivel_suspeita. Sem isto o modelo inventa um número a cada turno e a barra da HUD não significa nada.",
+  "regras_de_suspeita": {
+    "contradiz_evidencia_direta": "+25 a +40",
+    "contradiz_o_que_ele_mesmo_disse_antes": "+20 a +35",
+    "recusa_responder_ou_desvia": "+10 a +15",
+    "detalhe_verificavel_e_coerente": "-10 a -20",
+    "explica_uma_lacuna_de_forma_plausivel": "-15 a -25",
+    "observacao": "Estar sem álibi NÃO é mentira. Só marque detectou_mentira quando a fala colidir com uma evidência ou com uma fala anterior do próprio suspeito."
+  }
+}
