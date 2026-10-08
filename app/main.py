@@ -196,18 +196,22 @@ def _modelo_ou_404(modelo_id: str):
     return modelo
 
 
+# async def de proposito nas tres rotas de download: rota `def` comum roda numa
+# thread do threadpool, onde nao ha event loop — o create_task do download
+# estourava com 500 (so apareceu no executavel; o teste de unidade ja roda
+# dentro de um loop).
 @app.post("/models/{modelo_id}/download")
-def iniciar_download(modelo_id: str):
+async def iniciar_download(modelo_id: str):
     return downloads.iniciar(_modelo_ou_404(modelo_id)).como_dict()
 
 
 @app.get("/models/{modelo_id}/download")
-def status_download(modelo_id: str):
+async def status_download(modelo_id: str):
     return downloads.status(_modelo_ou_404(modelo_id)).como_dict()
 
 
 @app.delete("/models/{modelo_id}/download")
-def cancelar_download(modelo_id: str):
+async def cancelar_download(modelo_id: str):
     return downloads.cancelar(_modelo_ou_404(modelo_id)).como_dict()
 
 

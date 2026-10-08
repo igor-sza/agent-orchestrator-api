@@ -12,6 +12,7 @@ prompt, Gemini e Ollama passariam a divergir sem ninguem perceber.
 """
 import logging
 import os
+import sys
 from abc import ABC, abstractmethod
 from functools import lru_cache
 from typing import Any, Dict, Optional
@@ -21,7 +22,12 @@ from dotenv import load_dotenv
 
 from app.services.response_parser import parse_llm_json
 
-load_dotenv()
+# No executavel distribuido (PyInstaller) nao existe .env: a configuracao vem
+# do Unity (variaveis de ambiente) e a chave do Gemini vem do jogador. Pular o
+# load_dotenv ali garante que um .env esquecido perto do executavel — o de
+# desenvolvimento, com a chave do grupo — nunca seja lido no jogo.
+if not getattr(sys, "frozen", False):
+    load_dotenv()
 
 logger = logging.getLogger(__name__)
 

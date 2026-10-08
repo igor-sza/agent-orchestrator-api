@@ -217,6 +217,37 @@ def test_download_corrompido_e_descartado():
         assert not modelo.caminho.with_name(modelo.arquivo + ".part").exists()
 
 
+def test_download_pelas_rotas_http():
+    """
+    Pela app ASGI de verdade, nao pelo gerenciador direto: com as rotas
+    declaradas como `def`, o FastAPI as rodava fora do event loop e o
+    create_task do download virava HTTP 500 — so visto no executavel.
+    """
+    with _catalogo_falso() as modelo:
+        transporte_original = main.downloads._transport
+        main.downloads._transport = _hugging_face_falso(CONTEUDO, [])
+        try:
+            async def rodar():
+                cliente = httpx.AsyncClient(transport=httpx.ASGITransport(app=main.app),
+                                            base_url="http://teste")
+                async with cliente:
+                    r = await cliente.post(f"/models/{modelo.id}/download")
+                    assert r.status_code == 200, r.text
+                    for _ in range(100):
+                        estado = (await cliente.get(f"/models/{modelo.id}/download")).json()
+                        if estado["estado"] not in ("baixando", "verificando"):
+                            return estado
+                        await asyncio.sleep(0.02)
+            estado = asyncio.run(rodar())
+        finally:
+            main.downloads._transport = transporte_original
+            main.downloads._estados.pop(modelo.id, None)
+            main.downloads._tarefas.pop(modelo.id, None)
+
+        assert estado["estado"] == "concluido", estado
+        assert modelo.baixado
+
+
 def test_apagar_remove_o_arquivo():
     with _catalogo_falso() as modelo:
         modelo.caminho.parent.mkdir(parents=True, exist_ok=True)
