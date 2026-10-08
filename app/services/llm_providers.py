@@ -195,6 +195,35 @@ class GeminiProvider(LLMProvider):
         self.model = model or os.getenv("GEMINI_MODEL", GEMINI_MODEL_PADRAO)
         self.client = genai.Client(api_key=api_key)
 
+    @staticmethod
+    def _erro_de_conta(exc: BaseException) -> Optional[str]:
+        """
+        Chave invalida ou cota esgotada: nao adianta tentar de novo no mesmo
+        turno. Como LLMGenerationError, o orquestrador gastava 3 tentativas e
+        devolvia o fallback generico — o jogador com a chave errada so via o
+        detetive dizendo "Interessante... continue", sem saber por que.
+        """
+        codigo = getattr(exc, "code", None)
+        texto = str(exc).lower()
+        if codigo in (401, 403) or (codigo == 400 and "api key" in texto):
+            return ("A chave do Gemini foi recusada. Confira a chave em "
+                    "Configurações > Detetive (IA).")
+        if codigo == 429:
+            return ("A cota gratuita do Gemini acabou por agora. Espere alguns "
+                    "minutos ou troque para a IA local nas Configurações.")
+        return None
+
+    async def verificar_chave(self) -> None:
+        """Consulta barata (metadados do modelo), sem gastar cota de geração."""
+        try:
+            await self.client.aio.models.get(model=self.model)
+        except Exception as exc:
+            if _e_erro_de_conexao(exc):
+                raise LLMUnavailableError("Sem conexão com a API do Gemini.") from exc
+            raise LLMUnavailableError(
+                self._erro_de_conta(exc) or f"O Gemini recusou a chave: {exc}"
+            ) from exc
+
     async def generate(self, prompt: str) -> Dict[str, Any]:
         try:
             resposta = await self.client.aio.models.generate_content(
@@ -207,6 +236,11 @@ class GeminiProvider(LLMProvider):
                 raise LLMUnavailableError(
                     "Nao foi possivel alcancar a API do Gemini."
                 ) from exc
+
+            erro_de_conta = self._erro_de_conta(exc)
+            if erro_de_conta:
+                logger.error(f"Gemini recusou a conta: {exc}")
+                raise LLMUnavailableError(erro_de_conta) from exc
 
             logger.error(f"Gemini respondeu com erro: {exc}")
             raise LLMGenerationError(str(exc)) from exc

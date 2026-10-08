@@ -3,14 +3,14 @@ import json
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.schemas import InterrogateRequest, ResponseContract
+from app.schemas import InterrogateRequest, ResponseContract, TesteChaveRequest
 from app.services.case_repository import list_cases
 from app.services.context_memory import ContextMemoryManager
 from app.services.llm_providers import (
@@ -18,7 +18,10 @@ from app.services.llm_providers import (
     LLMUnavailableError,
     get_llm_provider,
 )
+from app.services.model_catalog import obter_modelo
+from app.services.model_downloader import GerenciadorDownloads
 from app.services.prompt_orchestrator import PromptOrchestrator
+from app.services.provider_registry import ProviderRegistry
 
 class JsonFormatter(logging.Formatter):
     def format(self, record):
@@ -58,6 +61,8 @@ async def lifespan(app: FastAPI):
     # O provedor local mantem um httpx.AsyncClient aberto entre requisicoes;
     # sem fechar no shutdown o uvicorn reclama de conexao vazando no reload.
     await get_llm_provider().aclose()
+    await provedores.aclose()
+    await downloads.aclose()
 
 app = FastAPI(
     title="Guilty API",
@@ -70,12 +75,14 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_credentials=True,
-    allow_methods=["GET", "POST"],
+    allow_methods=["GET", "POST", "DELETE"],
     allow_headers=["*"],
 )
 
 memoria = ContextMemoryManager(storage_dir="data")
 orchestrator = PromptOrchestrator(memory=memoria)
+provedores = ProviderRegistry()
+downloads = GerenciadorDownloads()
 
 # controle de spam
 rate_limit: Dict[str, List[float]] = {}
@@ -84,11 +91,20 @@ JANELA_TEMPO = 60
 
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    # "servico" deixa o launcher do Unity distinguir o nosso backend de outro
+    # programa qualquer que esteja usando a mesma porta.
+    return {"status": "ok", "servico": "guilty-backend"}
+
+
+def _sem_provedor_fixo() -> Optional[LLMProvider]:
+    # Na rota de verdade o provedor vem da requisicao (ProviderRegistry). O
+    # parametro existe para os testes injetarem um MockProvider direto.
+    return None
+
 
 @app.post("/interrogate", response_model=ResponseContract)
 async def interrogate(req: InterrogateRequest,
-                      provider: LLMProvider = Depends(get_llm_provider)):
+                      provider: Optional[LLMProvider] = Depends(_sem_provedor_fixo)):
     sessao = req.session_id
     agora = time.time()
 
@@ -102,6 +118,15 @@ async def interrogate(req: InterrogateRequest,
 
     historico.append(agora)
     rate_limit[sessao] = historico
+
+    if provider is None:
+        # Resolve ANTES de gravar a fala: com a IA indisponivel (modelo nao
+        # baixado, sem chave), a fala do jogador nao pode ficar orfa no
+        # historico e reaparecer duplicada quando ele tentar de novo.
+        try:
+            provider = await provedores.resolver(req.provider, req.gemini_api_key)
+        except LLMUnavailableError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     logger.info(f"Mensagem recebida na sessao {sessao}")
     memoria.append_turn(sessao, req.player_text, role="suspeito")
@@ -142,3 +167,56 @@ def get_history(session_id: str, limit: int = 10):
         "session_id": session_id,
         "history": linhas
     }
+
+# ─── Escolha de IA e modelos locais (tela Configuracoes > Detetive do Unity) ───
+
+@app.get("/providers")
+def listar_provedores():
+    """IAs disponiveis e o estado de cada uma (baixada? precisa de chave?)."""
+    itens = provedores.catalogo()
+    for item in itens:
+        modelo = obter_modelo(item["id"])
+        item["download"] = downloads.status(modelo).como_dict() if modelo else None
+    return {"providers": itens}
+
+
+@app.post("/providers/gemini/testar")
+async def testar_chave_gemini(req: TesteChaveRequest):
+    try:
+        await provedores.gemini(req.gemini_api_key).verificar_chave()
+    except LLMUnavailableError as exc:
+        return {"ok": False, "erro": str(exc)}
+    return {"ok": True, "erro": None}
+
+
+def _modelo_ou_404(modelo_id: str):
+    modelo = obter_modelo(modelo_id)
+    if modelo is None:
+        raise HTTPException(status_code=404, detail=f"Modelo desconhecido: '{modelo_id}'.")
+    return modelo
+
+
+@app.post("/models/{modelo_id}/download")
+def iniciar_download(modelo_id: str):
+    return downloads.iniciar(_modelo_ou_404(modelo_id)).como_dict()
+
+
+@app.get("/models/{modelo_id}/download")
+def status_download(modelo_id: str):
+    return downloads.status(_modelo_ou_404(modelo_id)).como_dict()
+
+
+@app.delete("/models/{modelo_id}/download")
+def cancelar_download(modelo_id: str):
+    return downloads.cancelar(_modelo_ou_404(modelo_id)).como_dict()
+
+
+@app.delete("/models/{modelo_id}")
+async def apagar_modelo(modelo_id: str):
+    """Libera os ~2 GB do disco. Descarrega da RAM antes de apagar o arquivo."""
+    modelo = _modelo_ou_404(modelo_id)
+    await provedores.descarregar(modelo_id)
+    try:
+        return (await downloads.apagar(modelo)).como_dict()
+    except OSError as exc:
+        raise HTTPException(status_code=409, detail=f"Não foi possível apagar o modelo: {exc}") from exc
