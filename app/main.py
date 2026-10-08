@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import json
+import sys
 import time
 from datetime import datetime
 from pathlib import Path
@@ -58,12 +59,15 @@ logger_app.addHandler(arquivo)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Cada partida deixa dois arquivos em data/. No jogo distribuido essa pasta
-    # fica no perfil do jogador e so crescia: a limpeza existia mas nunca rodava.
+    # Cada partida e unica. No jogo distribuido (executavel) nenhuma sessao
+    # sobrevive a uma nova abertura: apaga todas, o que tambem cobre quem fechou
+    # o jogo no meio da partida. Em desenvolvimento os historicos ficam 30 dias
+    # — sao eles que permitem analisar depois como o modelo se saiu.
+    dias = 0 if getattr(sys, "frozen", False) else 30
     try:
-        apagadas = memoria.cleanup_old_sessions(max_age_days=30)
+        apagadas = memoria.cleanup_old_sessions(max_age_days=dias)
         if apagadas:
-            logger.info(f"{apagadas} sessoes com mais de 30 dias removidas")
+            logger.info(f"{apagadas} sessoes antigas removidas")
     except OSError as exc:
         logger.warning(f"Limpeza de sessoes antigas falhou: {exc}")
     yield
@@ -166,6 +170,19 @@ def listar_casos():
 @app.get("/session/{session_id}")
 def get_session(session_id: str):
     return memoria.get_session_info(session_id)
+
+@app.delete("/session/{session_id}")
+def finalizar_sessao(session_id: str):
+    """
+    O jogo chama quando a partida acaba (reiniciar, voltar ao menu, nova
+    partida). Apaga o historico e o estado em memoria da sessao.
+    """
+    removeu = memoria.finalizar_sessao(session_id)
+    orchestrator.turn_counter.pop(session_id, None)
+    rate_limit.pop(session_id, None)
+    if removeu:
+        logger.info(f"Sessao {session_id} finalizada")
+    return {"session_id": session_id, "finalizada": True}
 
 @app.get("/session/{session_id}/history")
 def get_history(session_id: str, limit: int = 10):

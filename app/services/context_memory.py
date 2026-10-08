@@ -149,17 +149,33 @@ class ContextMemoryManager:
             falas.append((papel, self._texto_sem_cabecalho(linha)))
         return falas[-max_falas:]
 
+    def finalizar_sessao(self, session_id: str) -> bool:
+        """
+        Apaga tudo da partida: historico, suspeita/contradicoes e o .lock.
+
+        Cada partida e unica — uma partida nova nunca continua a anterior. Sem
+        isto os arquivos ficavam para tras, e uma sessao reaproveitada por
+        engano herdava a suspeita alta e ja nascia perdida.
+        """
+        md = self._session_md_path(session_id)
+        removeu = False
+        for caminho in (md, self._session_version_path(session_id), md.with_suffix('.lock')):
+            try:
+                if caminho.exists():
+                    caminho.unlink()
+                    removeu = True
+            except OSError:
+                pass
+        return removeu
+
     def cleanup_old_sessions(self, max_age_days: int = 30) -> int:
+        """`max_age_days=0` apaga todas as sessoes."""
         apagados = 0
         limite = datetime.now().timestamp() - (max_age_days * 24 * 60 * 60)
 
         for arquivo in self.storage_dir.glob("*_depoimento.md"):
-            if arquivo.stat().st_mtime < limite:
-                arquivo.unlink()
-                
-                arquivo_versao = self._session_version_path(arquivo.stem.replace('_depoimento', ''))
-                if arquivo_versao.exists():
-                    arquivo_versao.unlink()
+            if arquivo.stat().st_mtime <= limite:
+                self.finalizar_sessao(arquivo.stem.replace('_depoimento', ''))
                 apagados += 1
 
         return apagados
