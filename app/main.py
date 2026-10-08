@@ -35,7 +35,12 @@ pasta_logs.mkdir(parents=True, exist_ok=True)
 arquivo_log = pasta_logs / f'api_{datetime.now().strftime("%Y%m%d")}.log'
 
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
+
+# Handlers no logger do pacote "app", nao no deste modulo: pendurados so no
+# app.main, os logs de app.services.* (resposta bruta do modelo, tempo e tok/s
+# do llama.cpp) eram descartados — nao chegavam nem ao console nem ao arquivo.
+logger_app = logging.getLogger("app")
+logger_app.setLevel(logging.INFO)
 
 console = logging.StreamHandler()
 arquivo = logging.FileHandler(str(arquivo_log), encoding='utf-8')
@@ -44,8 +49,8 @@ formatter = JsonFormatter()
 console.setFormatter(formatter)
 arquivo.setFormatter(formatter)
 
-logger.addHandler(console)
-logger.addHandler(arquivo)
+logger_app.addHandler(console)
+logger_app.addHandler(arquivo)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):

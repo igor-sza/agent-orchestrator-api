@@ -128,6 +128,27 @@ class ContextMemoryManager:
 
         return "=== HISTÓRICO DA SESSÃO ===\n" + '\n\n'.join(partes)
 
+    def get_dialogo(self, session_id: str, max_falas: int = 6) -> List[tuple]:
+        """
+        Últimas falas como (papel, texto), sem timestamp.
+
+        Para modelos pequenos. O get_prompt_context manda cada fala duas vezes
+        (resumo e janela se sobrepõem) e com timestamp ISO: no Qwen 2.5 3B isso
+        fez o detetive copiar palavra por palavra a própria fala anterior, que
+        era a coisa mais repetida do prompt. Também é ~1/3 dos tokens.
+        """
+        falas = []
+        for linha in self.load_session_md(session_id).splitlines():
+            if not linha.strip():
+                continue
+            fim_colchete = linha.find(']')
+            resto = linha[fim_colchete + 1:].strip() if fim_colchete != -1 else linha
+            papel = ""
+            if resto.startswith('(') and ')' in resto:
+                papel = resto[1:resto.index(')')]
+            falas.append((papel, self._texto_sem_cabecalho(linha)))
+        return falas[-max_falas:]
+
     def cleanup_old_sessions(self, max_age_days: int = 30) -> int:
         apagados = 0
         limite = datetime.now().timestamp() - (max_age_days * 24 * 60 * 60)

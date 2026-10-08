@@ -3,7 +3,8 @@ Provedores de LLM (padrao Strategy).
 
 A regra de negocio nao sabe qual modelo esta atendendo: ela recebe um
 LLMProvider e chama `generate(prompt)`. Trocar Gemini por Ollama e mudar a
-variavel de ambiente LLM_TYPE, nada mais.
+variavel de ambiente LLM_TYPE, nada mais. O provedor llama.cpp (inferencia em
+processo, sem daemon) mora em llama_cpp_provider.py.
 
 O prompt e montado num lugar so — o PromptOrchestrator — e chega aqui pronto.
 Provedor cuida de transporte, nunca de conteudo: se cada um montasse o proprio
@@ -314,6 +315,18 @@ def get_llm_provider() -> LLMProvider:
     if tipo == "local":
         provider = OllamaProvider()
         logger.info(f"LLM_TYPE=local -> Ollama ({provider.model} em {provider.base_url})")
+        return provider
+
+    if tipo == "llamacpp":
+        # Import aqui dentro: o modulo importa LLMProvider deste arquivo, e no
+        # topo isso seria import circular.
+        from app.services.llama_cpp_provider import LlamaCppProvider
+
+        # So configura: o .gguf e carregado na primeira pergunta, entao um
+        # arquivo ausente vira 503 na rota em vez de derrubar a API aqui.
+        provider = LlamaCppProvider()
+        logger.info(f"LLM_TYPE=llamacpp -> {provider.model_path} "
+                    f"(n_threads={provider.n_threads}, n_gpu_layers={provider.n_gpu_layers})")
         return provider
 
     if tipo == "mock":
