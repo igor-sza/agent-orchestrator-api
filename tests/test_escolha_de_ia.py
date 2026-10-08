@@ -279,7 +279,8 @@ class _ErroApi(Exception):
 def test_chave_invalida_do_gemini_tem_mensagem_propria():
     msg = GeminiProvider._erro_de_conta(_ErroApi(400, "API key not valid. Please pass a valid API key."))
     assert msg and "chave" in msg.lower()
-    assert GeminiProvider._erro_de_conta(_ErroApi(429, "Resource exhausted")) is not None
+    # Cota (429) nao e erro de conta: a reserva tem cota propria (ver abaixo).
+    assert GeminiProvider._erro_de_conta(_ErroApi(429, "Resource exhausted")) is None
     # Outros erros continuam recuperaveis (retry do orquestrador).
     assert GeminiProvider._erro_de_conta(_ErroApi(500, "internal")) is None
 
@@ -361,3 +362,33 @@ def test_modelo_aposentado_404_passa_para_a_reserva():
     resposta = asyncio.run(provedor.generate("prompt"))
     assert chamados == ["principal", "reserva"]
     assert resposta["texto_detetive"] == "Onde o senhor estava?"
+
+
+COTA_DIARIA = ("429 RESOURCE_EXHAUSTED. Quota exceeded for metric: "
+               "generate_content_free_tier_requests, limit: 20, model: gemini-2.5-flash\n"
+               "Please retry in 6h35m3.991822121s.")
+
+
+def test_cota_esgotada_usa_a_reserva_que_tem_cota_propria():
+    """Plano gratis: 20 perguntas/dia POR MODELO. Visto em jogo na 20a pergunta."""
+    provedor, chamados = _gemini_com([_ErroApi(429, COTA_DIARIA), "ok"])
+    resposta = asyncio.run(provedor.generate("prompt"))
+    assert chamados == ["principal", "reserva"]
+    assert resposta["texto_detetive"] == "Onde o senhor estava?"
+
+
+def test_cota_esgotada_nos_dois_diz_quando_volta():
+    provedor, _ = _gemini_com([_ErroApi(429, COTA_DIARIA), _ErroApi(429, "Please retry in 41.2s.")])
+    try:
+        asyncio.run(provedor.generate("prompt"))
+    except LLMUnavailableError as exc:
+        # o tempo do 1o modelo (o principal), e nao "alguns minutos"
+        assert "6h35" in str(exc)
+        assert "Qwen" in str(exc)
+    else:
+        raise AssertionError("cota esgotada nos dois deveria ser LLMUnavailableError")
+
+
+def test_mensagem_de_cota_por_minuto():
+    msg = GeminiProvider._mensagem_de_cota(_ErroApi(429, "Please retry in 41.2s."))
+    assert "41 segundos" in msg
