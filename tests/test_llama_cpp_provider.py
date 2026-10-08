@@ -318,6 +318,48 @@ def test_fala_repetida_do_detetive_gera_nova_tentativa():
     assert resultado["texto_detetive"] == nova
 
 
+def test_aquecimento_cacheia_o_mesmo_prefixo_da_primeira_pergunta():
+    """
+    O aquecimento so ajuda se o prompt dele for identico ao de um 1o turno real
+    ate a fala do jogador — senao o KV cache nao e reaproveitado.
+    """
+    with _llama_cpp_falso() as falso:
+        provider = LlamaCppProvider(model_path=str(GGUF_FALSO))
+        orq = PromptOrchestrator(memory=memoria)
+
+        asyncio.run(orq.aquecer(provider))
+        aquecimento = falso.chamadas[-1]
+        assert aquecimento["max_tokens"] == 1
+        assert falso.instancias == 1   # o modelo ja ficou carregado
+
+        req = InterrogateRequest(session_id=_sessao_limpa("llamacpp_aquecido"),
+                                 player_text="Eu estava em casa.")
+        asyncio.run(interrogate(req, provider=provider))
+        pergunta = falso.chamadas[-1]
+
+        assert falso.instancias == 1
+        assert aquecimento["messages"][0] == pergunta["messages"][0]
+        prefixo = aquecimento["messages"][1]["content"].split('FALA DO JOGADOR: "')[0]
+        assert pergunta["messages"][1]["content"].startswith(prefixo)
+        assert len(prefixo) > 2000   # o caso inteiro esta no trecho cacheado
+
+
+def test_numeros_fora_da_faixa_sao_limitados():
+    """A gramatica nao impõe 0-100; um 150 estourava a barra de suspeita da HUD."""
+    with _llama_cpp_falso() as falso:
+        fora = json.loads(json.dumps(RESPOSTA_VALIDA))
+        fora["status_investigacao"]["nivel_suspeita"] = 150
+        fora["feedback_visual"]["bpm_musica"] = 300
+        falso.conteudo = json.dumps(fora)
+
+        provider = LlamaCppProvider(model_path=str(GGUF_FALSO))
+        req = InterrogateRequest(session_id=_sessao_limpa("llamacpp_faixa"), player_text="Oi.")
+        resultado = asyncio.run(interrogate(req, provider=provider))
+
+        assert resultado["status_investigacao"]["nivel_suspeita"] == 100
+        assert resultado["feedback_visual"]["bpm_musica"] == 140
+
+
 def test_n_gpu_layers_auto_vira_menos_um():
     with _env(LLAMA_CPP_N_GPU_LAYERS="auto"):
         assert LlamaCppProvider(model_path=str(GGUF_FALSO)).n_gpu_layers == -1

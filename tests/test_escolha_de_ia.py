@@ -147,6 +147,15 @@ def test_um_modelo_local_por_vez():
         assert registro._local is None
 
 
+def test_aquecer_responde_na_hora_e_avisa_modelo_ausente():
+    with _catalogo_falso() as modelo:
+        assert asyncio.run(main.aquecer_provedor("gemini"))["ok"] is True
+
+        sem_modelo = asyncio.run(main.aquecer_provedor(modelo.id))
+        assert sem_modelo["ok"] is False
+        assert "não foi baixado" in sem_modelo["erro"]
+
+
 def test_catalogo_lista_gemini_e_modelos_locais():
     with _catalogo_falso() as modelo:
         itens = {p["id"]: p for p in main.listar_provedores()["providers"]}

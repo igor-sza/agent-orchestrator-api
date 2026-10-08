@@ -106,6 +106,12 @@ class LLMProvider(ABC):
     async def aclose(self) -> None:
         """Libera conexoes. Sem efeito em provedores que nao abrem socket."""
 
+    async def aquecer(self, prompt: str) -> None:
+        """
+        Deixa o provedor pronto antes da primeira pergunta. Sem efeito por
+        padrao: so o modelo local tem carga e cache a adiantar.
+        """
+
 
 class MockProvider(LLMProvider):
     """

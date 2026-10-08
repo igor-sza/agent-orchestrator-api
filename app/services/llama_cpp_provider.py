@@ -14,7 +14,7 @@ import logging
 import os
 import time
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from app.schemas import ResponseContract
 from app.services.llm_providers import (
@@ -219,14 +219,43 @@ class LlamaCppProvider(LLMProvider):
         )
         return llm
 
+    @staticmethod
+    def _mensagens(prompt: str) -> List[Dict[str, str]]:
+        # Unico lugar que monta as mensagens: o aquecimento so adianta trabalho
+        # se gerar EXATAMENTE os mesmos tokens de prefixo que a pergunta real.
+        return [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": prompt},
+        ]
+
+    def _preencher_cache(self, prompt: str) -> None:
+        """Bloqueante. Processa o prompt e gera 1 token so para encher o KV cache."""
+        self._llm.create_chat_completion(messages=self._mensagens(prompt),
+                                         max_tokens=1, temperature=0.0)
+
+    async def aquecer(self, prompt: str) -> None:
+        """
+        Carrega o modelo e processa a parte fixa do prompt (caso, regras,
+        instrucoes) enquanto o jogador ainda esta olhando a cena.
+
+        Sem isto, a 1a pergunta pagava a carga do .gguf (3-13s, mais com disco
+        frio) e o processamento de ~1200 tokens de prompt (~12s em CPU). Com o
+        prefixo no KV cache, a 1a pergunta custa o mesmo que as seguintes.
+        Usa o mesmo lock da inferencia: se o jogador perguntar no meio do
+        aquecimento, a pergunta espera e ja encontra o cache pronto.
+        """
+        async with self._lock:
+            if self._llm is None:
+                self._llm = await asyncio.to_thread(self._carregar)
+            inicio = time.perf_counter()
+            await asyncio.to_thread(self._preencher_cache, prompt)
+        logger.info(f"llama.cpp ({self.model}): aquecido em {time.perf_counter() - inicio:.1f}s")
+
     def _inferir(self, prompt: str) -> Dict[str, Any]:
         """Bloqueante (CPU). Sempre chamado fora do event loop."""
         try:
             return self._llm.create_chat_completion(
-                messages=[
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": prompt},
-                ],
+                messages=self._mensagens(prompt),
                 # Vira gramatica GBNF: o modelo fica fisicamente impedido de
                 # gerar qualquer coisa fora do schema — inclusive <think> de
                 # modelos com raciocinio (Qwen3, DeepSeek-R1), cerca markdown

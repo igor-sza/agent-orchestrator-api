@@ -297,6 +297,38 @@ Responda com JSON puro (sem ```json):
 }}
 """
 
+    # Sessao que nunca existe na memoria: o prompt dela e identico ao de um 1o
+    # turno real ate a fala do jogador — e esse prefixo que o aquecimento cacheia.
+    SESSAO_AQUECIMENTO = "__aquecimento__"
+
+    async def aquecer(self, provider: LLMProvider, case_id: Optional[str] = None) -> None:
+        """Adianta carga e cache do provedor (ver LlamaCppProvider.aquecer)."""
+        prompt = self.build_prompt(
+            self.SESSAO_AQUECIMENTO, "", get_case(case_id),
+            incluir_verdade=provider.suporta_contexto_confidencial,
+            compacto=not provider.suporta_contexto_confidencial,
+        )
+        await provider.aquecer(prompt)
+
+    @staticmethod
+    def _limitar_faixas(resultado: Dict[str, Any]) -> None:
+        """
+        Prende os numeros na faixa que o jogo entende. O prompt pede 0-100 e
+        60-140, mas nada impede o modelo de mandar 150 — o ResponseContract so
+        exige int, e a gramatica do llama.cpp ignora minimum/maximum. Fora da
+        faixa, a barra de suspeita da HUD estourava.
+        """
+        status = resultado.get('status_investigacao', {})
+        visual = resultado.get('feedback_visual', {})
+        try:
+            status['nivel_suspeita'] = max(0, min(100, int(status.get('nivel_suspeita', 0))))
+        except (TypeError, ValueError):
+            status['nivel_suspeita'] = 0
+        try:
+            visual['bpm_musica'] = max(60, min(140, int(visual.get('bpm_musica', 90))))
+        except (TypeError, ValueError):
+            visual['bpm_musica'] = 90
+
     async def analyze(self, session_id: str, player_text: str,
                       provider: LLMProvider,
                       case_id: Optional[str] = None) -> Dict[str, Any]:
@@ -368,6 +400,8 @@ Responda com JSON puro (sem ```json):
         # se der erro em todas as tentativas, usa a resposta fallback
         if not resultado:
             return self._fallback_response(session_id, player_text)
+
+        self._limitar_faixas(resultado)
 
         try:
             nivel = int(resultado.get('status_investigacao', {}).get('nivel_suspeita', 0))

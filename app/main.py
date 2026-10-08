@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import json
 import time
@@ -57,6 +58,14 @@ logger_app.addHandler(arquivo)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Cada partida deixa dois arquivos em data/. No jogo distribuido essa pasta
+    # fica no perfil do jogador e so crescia: a limpeza existia mas nunca rodava.
+    try:
+        apagadas = memoria.cleanup_old_sessions(max_age_days=30)
+        if apagadas:
+            logger.info(f"{apagadas} sessoes com mais de 30 dias removidas")
+    except OSError as exc:
+        logger.warning(f"Limpeza de sessoes antigas falhou: {exc}")
     yield
     # O provedor local mantem um httpx.AsyncClient aberto entre requisicoes;
     # sem fechar no shutdown o uvicorn reclama de conexao vazando no reload.
@@ -178,6 +187,36 @@ def listar_provedores():
         modelo = obter_modelo(item["id"])
         item["download"] = downloads.status(modelo).como_dict() if modelo else None
     return {"providers": itens}
+
+
+# Referencias fortes: sem elas o asyncio pode coletar a tarefa no meio.
+_aquecimentos: set = set()
+
+
+@app.post("/providers/{provider_id}/aquecer")
+async def aquecer_provedor(provider_id: str):
+    """
+    O jogo chama ao entrar na partida. Responde na hora; o trabalho (carregar
+    o modelo e processar a parte fixa do prompt) segue em segundo plano e a 1a
+    pergunta encontra tudo pronto.
+    """
+    if provider_id == "gemini":
+        return {"ok": True, "erro": None}   # nuvem: nada a adiantar
+    try:
+        provider = await provedores.resolver(provider_id)
+    except LLMUnavailableError as exc:
+        return {"ok": False, "erro": str(exc)}
+
+    tarefa = asyncio.create_task(orchestrator.aquecer(provider))
+    _aquecimentos.add(tarefa)
+
+    def _fim(t: asyncio.Task):
+        _aquecimentos.discard(t)
+        if not t.cancelled() and t.exception() is not None:
+            logger.warning(f"Aquecimento de {provider_id} falhou: {t.exception()}")
+
+    tarefa.add_done_callback(_fim)
+    return {"ok": True, "erro": None}
 
 
 @app.post("/providers/gemini/testar")
